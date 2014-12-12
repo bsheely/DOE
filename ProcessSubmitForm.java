@@ -1,4 +1,4 @@
-package gov.osti.elink.servlet;
+ppackage gov.osti.elink.servlet;
 
 import gov.osti.framework.dbi.Dbi;
 import org.json.JSONArray;
@@ -22,13 +22,14 @@ import java.util.TreeSet;
 import java.util.logging.Logger;
 
 /**
- * Saves the submitted form data to the database
+ * Processes the submitted form data and returns the submitted data if successful
  * Created by sheelyb on 11/26/2014.
  */
 public class ProcessSubmitForm extends HttpServlet {
     private static final long serialVersionUID = 1L;
     private static final Logger log = Logger.getLogger(ProcessSubmitForm.class.getName());
     private int ostiId;                                                             //Required
+    private char releaseFlag;
     private String[] award_ids;                                                     //Required
     private String journal;                                                         //Required
     private String volume;
@@ -44,7 +45,8 @@ public class ProcessSubmitForm extends HttpServlet {
     private String urls;                                                            //Required
     private String availability;                                                    //Required
     private String description;
-
+    private JSONObject json;
+    
     class Author {
         private String firstName;
         private String middleName;
@@ -52,7 +54,7 @@ public class ProcessSubmitForm extends HttpServlet {
         private String orcId;
         private int position;
     }
-
+    
     private class AuthorComparator implements Comparator<Author> {
         @Override
         public int compare(Author author1, Author author2) {
@@ -62,7 +64,7 @@ public class ProcessSubmitForm extends HttpServlet {
                 return -1;
         }
     }
-
+    
     /**
      * Handles the HTTP <code>POST</code> method. Client posts JSON
      *
@@ -82,18 +84,18 @@ public class ProcessSubmitForm extends HttpServlet {
             response.sendError(500, "Exception: " + e.getMessage());
             return;
         }
-        JSONObject json = new JSONObject(stringBuilder.toString());
+        json = new JSONObject(stringBuilder.toString());
         // JSON contains keys with empty values
         if (!json.has("ostiid") || json.getString("ostiid").isEmpty() ||
-                !json.has("awardids") || json.getString("awardids").isEmpty() ||
-                !json.has("journalname") || json.getString("journalname").isEmpty() ||
-                !json.has("title") || json.getString("title").isEmpty() ||
-                ((!json.has("allAuthorsString") || json.getString("allAuthorsString").isEmpty()) && !json.has("authors")) ||
-                ((!json.has("pubtext") || json.getString("pubtext").isEmpty()) &&
-                        (!json.has("altPubDtTxt") || json.getString("altPubDtTxt").isEmpty())) ||
-                !json.has("sponsor") || json.getString("sponsor").isEmpty() ||
-                !json.has("publisher") || json.getString("publisher").isEmpty() ||
-                !json.has("availability") || json.getString("availability").isEmpty()) {
+            !json.has("awardids") || json.getString("awardids").isEmpty() ||
+            !json.has("journalname") || json.getString("journalname").isEmpty() ||
+            !json.has("title") || json.getString("title").isEmpty() ||
+            ((!json.has("allAuthorsString") || json.getString("allAuthorsString").isEmpty()) && !json.has("authors")) ||
+            ((!json.has("pubtext") || json.getString("pubtext").isEmpty()) &&
+             (!json.has("altPubDtTxt") || json.getString("altPubDtTxt").isEmpty())) ||
+            !json.has("sponsor") || json.getString("sponsor").isEmpty() ||
+            !json.has("publisher") || json.getString("publisher").isEmpty() ||
+            !json.has("availability") || json.getString("availability").isEmpty()) {
             response.sendError(206, "JSON missing required content");
             return;
         }
@@ -113,21 +115,30 @@ public class ProcessSubmitForm extends HttpServlet {
         title = json.getString("title");
         // Author(s)
         if (json.has("allAuthorsString") && !json.getString("allAuthorsString").isEmpty()) {
+            JSONArray jsonArray = new JSONArray();
             String[] authorsArray = json.getString("allAuthorsString").split(";");
             int position = 1;
             for (String temp : authorsArray) {
-                // NOTE names are in the form "first middle, last"
+                // NOTE names are in the form "last, first middle"
                 String[] nameParts = temp.split(",");
-                String[] firstMiddle = nameParts[0].split(" ");
+                String[] firstMiddle = nameParts[1].trim().split(" ");
                 Author author = new Author();
-                author.lastName = nameParts[1];
+                author.lastName = nameParts[0].trim();
                 author.firstName = firstMiddle[0];
                 author.middleName = (firstMiddle.length > 1) ? firstMiddle[1] : null;
                 author.position = position;
                 author.orcId = null;
                 authors.add(author);
+                JSONObject obj = new JSONObject();
+                obj.put("lastName", author.lastName);
+                obj.put("firstName", author.firstName);
+                obj.put("middleName", author.middleName);
+                obj.put("position", author.position);
+                obj.put("orcid", author.orcId);
+                jsonArray.put(obj);
                 ++position;
             }
+            json.put("authors", jsonArray);
         } else {
             // No assumption that authors are in 'correct' order in JSON
             JSONArray array = json.getJSONArray("authors");
@@ -135,10 +146,10 @@ public class ProcessSubmitForm extends HttpServlet {
             for (int i = 0; i < size; ++i) {
                 JSONObject obj = array.getJSONObject(i);
                 Author author = new Author();
-                author.lastName = obj.getString("authorLName");
-                author.firstName = obj.getString("authorFName");
-                author.middleName = obj.has("authorMName") && !obj.getString("authorMName").isEmpty() ? obj.getString("authorMName") : null;
-                author.position = Integer.valueOf(obj.getString("authorPlace"));
+                author.lastName = obj.getString("lastName");
+                author.firstName = obj.getString("firstName");
+                author.middleName = obj.has("middleName") && !obj.getString("middleName").isEmpty() ? obj.getString("middleName") : null;
+                author.position = Integer.valueOf(obj.getString("position"));
                 author.orcId = obj.has("orcid") && !obj.getString("orcid").isEmpty() ? obj.getString("orcid") : null;
                 authors.add(author);
             }
@@ -169,14 +180,14 @@ public class ProcessSubmitForm extends HttpServlet {
         description = json.has("description") && !json.getString("description").isEmpty() ? json.getString("description") : null;
         processRequest(response);
     }
-
+    
     /**
      * Returns a short description of the servlet.
      */
     public String getServletInfo() {
         return "Process submitted form data";
     }
-
+    
     private void processRequest(HttpServletResponse response) throws IOException {
         PreparedStatement statement = null;
         Connection connection = null;
@@ -184,77 +195,75 @@ public class ProcessSubmitForm extends HttpServlet {
             connection = Dbi.getConnection();
             String sql;
             if (ostiId != 0) {
-                sql = "update nsf.metadata set release_flag = ?, journal_name = ?, journal_volume = ?, " +
-                        "journal_issue = ?, doi = ?, title = ?, publication_date = ?, publication_date_text = ?, " +
-                        "language = ?, " + "country_publication_code = ?, sponsor_org = ?, availability = ?, description = ? " +
-                        "where release_flag = 'N' and osti_id = " + ostiId;
+                sql = "update nsf.metadata set journal_name = ?, journal_volume = ?, journal_issue = ?, doi = ?, " +
+                "title = ?, publication_date = ?, publication_date_text = ?, language = ?, " +
+                "country_publication_code = ?, sponsor_org = ?, availability = ?, description = ? " +
+                "where osti_id = " + ostiId;
             } else {
-                sql = "insert into nsf.metadata (osti_id, date_osti_id_assigned, source_input_type, " +
-                        "release_flag, journal_name, journal_volume, journal_issue, doi, title, publication_date, " +
-                        "publication_date_text, language, country_publication_code, sponsor_org, availability, description) " +
-                        "values (nextval('osti_id_seq'), localtimestamp, 'DOE2411WEB', ?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                sql = "insert into nsf.metadata (osti_id, release_flag, date_osti_id_assigned, source_input_type, " +
+                "journal_name, journal_volume, journal_issue, doi, title, publication_date, " +
+                "publication_date_text, language, country_publication_code, sponsor_org, availability, description) " +
+                "values (nextval('osti_id_seq'), 'N', localtimestamp, 'DOE2411WEB', ?,?,?,?,?,?,?,?,?,?,?,?)";
             }
             statement = connection.prepareStatement(sql);
-            // Release Flag
-            statement.setObject(1, 'N', Types.CHAR);
             // Journal Name
-            statement.setString(2, journal);
+            statement.setString(1, journal);
             // Volume
             if (volume != null) {
-                statement.setString(3, volume);
+                statement.setString(2, volume);
             } else {
-                statement.setNull(3, Types.VARCHAR);
+                statement.setNull(2, Types.VARCHAR);
             }
             // Issue
             if (issue != null) {
-                statement.setString(4, issue);
+                statement.setString(3, issue);
             } else {
-                statement.setNull(4, Types.VARCHAR);
+                statement.setNull(3, Types.VARCHAR);
             }
             // DOI
             if (doi != null) {
-                statement.setString(5, doi);
+                statement.setString(4, doi);
             } else {
-                statement.setNull(5, Types.VARCHAR);
+                statement.setNull(4, Types.VARCHAR);
             }
             // Title
-            statement.setString(6, title);
+            statement.setString(5, title);
             // Publication Date
             if (publicationDate != null) {
-                statement.setDate(7, new java.sql.Date(publicationDate.getTime()));
-                statement.setNull(8, Types.VARCHAR);
+                statement.setDate(6, new java.sql.Date(publicationDate.getTime()));
+                statement.setNull(7, Types.VARCHAR);
             } else {
-                statement.setNull(7, Types.DATE);
-                statement.setString(8, publicationYearTP);
+                statement.setNull(6, Types.DATE);
+                statement.setString(7, publicationYearTP);
             }
             // Language(s)
             if (languages != null) {
-                statement.setString(9, languages);
+                statement.setString(8, languages);
             } else {
-                statement.setNull(9, Types.VARCHAR);
+                statement.setNull(8, Types.VARCHAR);
             }
             // Country Code
             if (countryCode != null) {
-                statement.setString(10, countryCode);
+                statement.setString(9, countryCode);
             } else {
-                statement.setNull(10, Types.VARCHAR);
+                statement.setNull(9, Types.VARCHAR);
             }
             // Sponsor(s)
-            statement.setString(11, sponsors);
+            statement.setString(10, sponsors);
             // Availability
-            statement.setString(12, availability);
+            statement.setString(11, availability);
             // Description/Abstract
             if (description != null) {
                 /* NOTE: Database field is clob, but this code is not implemented in the driver!
-                Clob clob = connection.createClob();
-                clob.setString(0, description);
-                statement.setClob(14, clob);
-                */
-                statement.setString(13, description);
+                 Clob clob = connection.createClob();
+                 clob.setString(0, description);
+                 statement.setClob(14, clob);
+                 */
+                statement.setString(12, description);
             } else {
-                statement.setNull(13, Types.CLOB);
+                statement.setNull(12, Types.CLOB);
             }
-            //TODO find out where these 2 things go in the database
+            //TODO process these 2 things when the database is modified
             // URLs to full text
             // Award IDs
             statement.executeUpdate();
@@ -267,21 +276,31 @@ public class ProcessSubmitForm extends HttpServlet {
                     ostiId = resultSet.getInt(1);
                 }
                 statement.close();
+                releaseFlag = 'N';
+                json.put("ostiid", ostiId);
             } else {
+                // Save the release_flag setting prior to deleting records
+                sql = "select release_flag from nsf.metadata_author_detail where osti_id = " + ostiId;
+                statement = connection.prepareStatement(sql);
+                ResultSet resultSet = statement.executeQuery();
+                if (resultSet.next()) {
+                    releaseFlag = resultSet.getString("release_flag").charAt(0);
+                }
+                statement.close();
                 // Delete all existing records from metadata_author_detail table with this OSTI ID
-                sql = "delete from nsf.metadata_author_detail where osti_id = " + ostiId + " and release_flag = 'N'";
+                sql = "delete from nsf.metadata_author_detail where osti_id = " + ostiId;
                 statement = connection.prepareStatement(sql);
                 statement.executeUpdate();
                 statement.close();
             }
             // Insert all authors into metadata_author_detail table
             sql = "insert into nsf.metadata_author_detail (osti_id, direct_entry_flag, preferred_flag, " +
-                    "release_flag, place, first_name, middle_name, last_name, orcid_id, non_human_flag) " +
-                    "values (" + ostiId + ", true, true, ?,?,?,?,?,?,?)";
+            "release_flag, place, first_name, middle_name, last_name, orcid_id, non_human_flag) " +
+            "values (" + ostiId + ", true, true, ?,?,?,?,?,?,?)";
             statement = connection.prepareStatement(sql);
             for (Author author : authors) {
                 // Release Flag
-                statement.setObject(1, 'N', Types.CHAR);
+                statement.setObject(1, releaseFlag, Types.CHAR);
                 // Place
                 statement.setInt(2, author.position);
                 // First name
@@ -303,6 +322,11 @@ public class ProcessSubmitForm extends HttpServlet {
                 statement.addBatch();
             }
             statement.executeBatch();
+            response.setContentType("application/json");
+            PrintWriter out = response.getWriter();
+            out.write(json.toString());
+            out.flush();
+            out.close();
         } catch (Exception e) {
             log.severe(e.getMessage());
             response.sendError(500, "Exception: " + e.getMessage());
