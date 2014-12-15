@@ -1,0 +1,23 @@
+<Attributes xmlns="urn:mace:shibboleth:2.0:attribute-map" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+    <!--
+    The mappings are a mix of SAML 1.1 and SAML 2.0 attribute names agreed to within the Shibboleth
+    community. The non-OID URNs are SAML 1.1 names and most of the OIDs are SAML 2.0 names, with a
+    few exceptions for newer attributes where the name is the same for both versions. You will
+    usually want to uncomment or map the names for both SAML versions as a unit.
+    -->
+    <Attribute name="sn" id="sn">
+        <AttributeDecoder xsi:type="StringAttributeDecoder"/>
+    </Attribute>
+    <Attribute name="cn" id="cn"/>
+   <!-- <Attribute name="urn:oid:2.16.840.1.113730.3.1.241" id="displayName"/>-->
+
+   <Attribute name="Groups" id="Groups"/>
+   <Attribute name="IDPSource" id="IDPSource" />
+
+   <Attribute name="urn:oasis:names:tc:SAML:2.0:nameid-format:transient" id="nsf-id">
+           <AttributeDecoder xsi:type="NameIDAttributeDecoder" formatter="$Name" defaultQualifiers="true"/>
+   </Attribute>
+
+
+</Attributes>
